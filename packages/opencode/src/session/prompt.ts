@@ -55,6 +55,8 @@ import { eq } from "drizzle-orm"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
+import { assistantText, commandHooks, continuationCap, formatContinuation } from "./stop-hook"
+import { runStopHooks } from "./stop-hook-run"
 import { LLMEvent } from "@opencode-ai/llm"
 
 // @ts-ignore
@@ -1083,6 +1085,7 @@ const layer = Layer.effect(
         const ctx = yield* InstanceState.context
         let structured: unknown
         let step = 0
+        let stopHookContinuations = 0
         const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
         while (true) {
@@ -1124,6 +1127,64 @@ const layer = Layer.effect(
                 tool: orphan.tool,
                 callID: orphan.callID,
               })
+            }
+            // Stop hooks run only for a normal top-level finish. Interrupts and
+            // API errors set `error`; subagents have a parent session.
+            if (!session.parentID && !lastAssistant.error && lastAssistant.finish !== "error") {
+              const cap = continuationCap()
+              const cfg = yield* config.get()
+              const decision = yield* runStopHooks({
+                sessionID,
+                cwd: ctx.directory,
+                shell: cfg.shell,
+                commands: commandHooks(cfg.hooks),
+                stopHookActive: stopHookContinuations > 0,
+                continuationCount: stopHookContinuations,
+                cap,
+                lastAssistantMessage: assistantText(lastAssistantMsg?.parts ?? []),
+                plugin: (output) =>
+                  plugin.trigger(
+                    "session.stop",
+                    {
+                      sessionID,
+                      cwd: ctx.directory,
+                      stopHookActive: stopHookContinuations > 0,
+                      continuationCount: stopHookContinuations,
+                      continuationCap: cap,
+                      lastAssistantMessage: assistantText(lastAssistantMsg?.parts ?? []),
+                    },
+                    output,
+                  ),
+              })
+              for (const warning of decision.warnings) {
+                yield* Effect.logWarning(warning, { "session.id": sessionID })
+              }
+              if (decision.action === "continue") {
+                stopHookContinuations++
+                const continuation: SessionV1.User = {
+                  id: MessageID.ascending(),
+                  sessionID,
+                  role: "user",
+                  time: { created: Date.now() },
+                  agent: lastUser.agent,
+                  model: lastUser.model,
+                }
+                yield* sessions.updateMessage(continuation)
+                yield* sessions.updatePart({
+                  id: PartID.ascending(),
+                  messageID: continuation.id,
+                  sessionID,
+                  type: "text",
+                  text: formatContinuation(decision.kind, decision.message),
+                  synthetic: true,
+                } satisfies SessionV1.TextPart)
+                yield* Effect.logInfo("stop hook continued session", {
+                  "session.id": sessionID,
+                  kind: decision.kind,
+                  continuations: stopHookContinuations,
+                })
+                continue
+              }
             }
             yield* Effect.logInfo("exiting loop", { "session.id": sessionID })
             break

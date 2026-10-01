@@ -324,6 +324,35 @@ export interface Hooks {
     },
     output: { enabled: boolean },
   ) => Promise<void>
+  /**
+   * Called when the top-level agent is about to stop after a finished response.
+   * Does not run on user interrupt, API error, or a subagent session.
+   *
+   * Mutate `output` to keep the agent working:
+   * - `decision: "block"` plus `reason` prevents the stop. The reason is sent
+   *   back as a synthetic user message.
+   * - `additionalContext` also continues the turn, framed as feedback.
+   * - Leave `output` unchanged to allow the stop.
+   *
+   * `stopHookActive` is true when this continuation was itself caused by a
+   * stop hook. OpenCode forces a stop after `continuationCap` consecutive
+   * continuations (default 8, override with OPENCODE_STOP_HOOK_BLOCK_CAP).
+   */
+  "session.stop"?: (
+    input: {
+      sessionID: string
+      cwd: string
+      stopHookActive: boolean
+      continuationCount: number
+      continuationCap: number
+      lastAssistantMessage?: string
+    },
+    output: {
+      decision?: "block"
+      reason?: string
+      additionalContext?: string
+    },
+  ) => Promise<void>
   "experimental.text.complete"?: (
     input: { sessionID: string; messageID: string; partID: string },
     output: { text: string },

@@ -763,6 +763,53 @@ You can control context compaction behavior through the `compaction` option.
 
 ---
 
+### Stop hooks
+
+`hooks.Stop` runs when the top-level agent finishes a turn and can force it to keep working. This matches Claude Code's Stop hook: the command receives JSON on stdin and replies with an exit code or JSON on stdout.
+
+```json title="opencode.json"
+{
+  "$schema": "https://opencode.ai/config.json",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash .opencode/hooks/stop.sh",
+            "timeout": 120
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+```bash title=".opencode/hooks/stop.sh"
+#!/bin/bash
+if ! npm test >/tmp/opencode-stop-test.log 2>&1; then
+  echo "Tests are failing. Fix them before stopping." >&2
+  exit 2
+fi
+exit 0
+```
+
+- Exit `0` with no JSON allows the stop.
+- Exit `2` blocks the stop. stderr is the reason the agent must continue. JSON cannot override exit 2.
+- Exit `0` with `{"decision":"block","reason":"..."}` also continues the turn. `reason` is required.
+- `hookSpecificOutput.additionalContext` continues the turn as feedback rather than a block.
+- Any other exit code is logged and does not block.
+- The agent is forced to stop after 8 consecutive continuations. Override with `OPENCODE_STOP_HOOK_BLOCK_CAP`.
+- `timeout` is seconds. The default is 600. A timed-out hook does not block.
+- `OPENCODE_PROJECT_DIR` is set to the session directory. `CLAUDE_PROJECT_DIR` is set to the same path so scripts written for Claude Code can resolve the project root.
+- The hook does not run on user interrupt, API error, or a subagent session.
+- `background_tasks` and `session_crons` are present in the stdin JSON and currently always empty.
+
+Plugins can implement the same decision with the `session.stop` hook. See [Plugins](/docs/plugins#stop-hook).
+
+---
+
 ### Watcher
 
 You can configure file watcher ignore patterns through the `watcher` option.

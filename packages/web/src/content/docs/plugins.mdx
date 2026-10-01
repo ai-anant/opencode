@@ -387,3 +387,29 @@ Format as a structured prompt that a new agent can use to resume work.
 ```
 
 When `output.prompt` is set, it completely replaces the default compaction prompt. The `output.context` array is ignored in this case.
+
+---
+
+### Stop hook
+
+OpenCode can keep working after a finished turn, the same way Claude Code's `Stop` hook can. The hook does not run on a user interrupt, an API error, or a subagent session.
+
+A plugin blocks the stop by setting `decision` and `reason`. `additionalContext` continues the turn as feedback instead of a block. Leave the output unchanged to allow the stop.
+
+```ts title=".opencode/plugins/stop.ts"
+import type { Plugin } from "@opencode-ai/plugin"
+
+export const StopPlugin: Plugin = async () => {
+  return {
+    "session.stop": async (input, output) => {
+      if (input.stopHookActive) return
+      output.decision = "block"
+      output.reason = "Run the test suite and report the result before stopping."
+    },
+  }
+}
+```
+
+`stopHookActive` is true when this continuation was itself caused by a stop hook. After 8 consecutive continuations OpenCode stops anyway. Raise the cap with `OPENCODE_STOP_HOOK_BLOCK_CAP`.
+
+Shell commands configured under `hooks.Stop` use the same contract as Claude Code: JSON on stdin, exit code 2 or `{"decision":"block","reason":"..."}` to continue. See [Config](/docs/config#stop-hooks).
